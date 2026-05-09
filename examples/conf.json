@@ -1,0 +1,10 @@
+{
+  "plugins_enabled": ["default", "straiker"],
+  "credentials": {
+    "straiker": {
+      "apiKey": "REPLACE_WITH_STRAIKER_APP_KEY",
+      "detectUrl": "https://api.prod.straiker.ai/api/v1/detect"
+    }
+  },
+  "cache": false
+}

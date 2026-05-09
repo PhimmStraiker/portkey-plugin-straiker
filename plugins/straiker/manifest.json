@@ -1,0 +1,74 @@
+{
+  "id": "straiker",
+  "description": "Straiker DefendAI guardrail. Calls /api/v1/detect (chatbot) or /api/v1/detect?agentic (agentic) and returns a verdict based on the threat score. Mirrors the Kong, Azure APIM, and LiteLLM integrations: same payload, same agent-loop dedup, same blocking semantics.",
+  "credentials": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "label": "Straiker API key",
+        "description": "Bearer credential for the Straiker DefendAI app the verdicts should land in.",
+        "encrypted": true
+      },
+      "detectUrl": {
+        "type": "string",
+        "label": "Detect endpoint URL",
+        "description": "Base URL of the Straiker detect endpoint. Default: https://api.prod.straiker.ai/api/v1/detect",
+        "default": "https://api.prod.straiker.ai/api/v1/detect"
+      }
+    },
+    "required": ["apiKey"]
+  },
+  "functions": [
+    {
+      "name": "Detect",
+      "id": "detect",
+      "type": "guardrail",
+      "description": "Score the request (beforeRequestHook) or response (afterRequestHook) with Straiker DefendAI. Set agentic=true for multi-turn / tool-calling agents (calls /detect?agentic and forwards the full conversation including tool_calls).",
+      "supportedHooks": ["beforeRequestHook", "afterRequestHook"],
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "agentic": {
+            "type": "boolean",
+            "label": "Agentic mode",
+            "description": "When true, calls /detect?agentic and forwards the full messages[] including tool_calls and tool results. When false, single-turn /detect.",
+            "default": false
+          },
+          "threshold": {
+            "type": "number",
+            "label": "Block threshold",
+            "description": "Score above this returns verdict=false. Range 0-1.",
+            "default": 0.5,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "source": {
+            "type": "string",
+            "label": "Source app name",
+            "description": "Straiker Console app name. Should match an existing application; in agentic mode this distinguishes agentic apps from chatbot apps.",
+            "default": "portkey-plugin"
+          },
+          "destination": {
+            "type": "string",
+            "label": "Destination",
+            "description": "Upstream model host the request is being forwarded to (used in Console attribution, not for routing).",
+            "default": "api.openai.com"
+          },
+          "timeoutMs": {
+            "type": "number",
+            "label": "Detect timeout (ms)",
+            "description": "Per-call HTTP timeout for the Straiker detect API.",
+            "default": 5000
+          },
+          "failOpen": {
+            "type": "boolean",
+            "label": "Fail open",
+            "description": "When true, return verdict=true when Straiker is unreachable. When false, return an error and let Portkey decide.",
+            "default": false
+          }
+        }
+      }
+    }
+  ]
+}

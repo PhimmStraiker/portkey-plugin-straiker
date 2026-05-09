@@ -1,0 +1,22 @@
+{
+  "name": "portkey-plugin-straiker",
+  "version": "0.1.0",
+  "description": "Straiker DefendAI guardrail plugin for the Portkey AI Gateway. Mirrors the Kong, Azure APIM and LiteLLM integrations: same payload, same agent-loop dedup, same blocking semantics, single-turn /detect or multi-turn /detect?agentic.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "jest",
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@types/node": "^20.11.30",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.4.5"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": ["**/plugins/straiker/*.test.ts"]
+  }
+}
