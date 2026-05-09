@@ -1,0 +1,30 @@
+{
+  "$comment": "Portkey config for an agentic / tool-calling app. agentic=true forwards the full messages[] (including tool_calls and tool results) to /detect?agentic. The plugin dedups intermediate agent iterations so one logical user prompt produces one pre-call + one post-call detect call regardless of how many tool steps the agent runs.",
+  "virtual_key": "openai-virtual-key",
+  "before_request_hooks": [
+    {
+      "type": "guardrail",
+      "id": "straiker.detect",
+      "deny": true,
+      "parameters": {
+        "agentic": true,
+        "threshold": 0.5,
+        "source": "portkey-agentic",
+        "destination": "api.openai.com"
+      }
+    }
+  ],
+  "after_request_hooks": [
+    {
+      "type": "guardrail",
+      "id": "straiker.detect",
+      "deny": true,
+      "parameters": {
+        "agentic": true,
+        "threshold": 0.5,
+        "source": "portkey-agentic",
+        "destination": "api.openai.com"
+      }
+    }
+  ]
+}

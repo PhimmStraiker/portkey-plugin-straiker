@@ -1,0 +1,30 @@
+{
+  "$comment": "Portkey config that wires the Straiker plugin in chatbot mode. before_request_hooks gates the user prompt; after_request_hooks scores the assistant response.",
+  "virtual_key": "openai-virtual-key",
+  "before_request_hooks": [
+    {
+      "type": "guardrail",
+      "id": "straiker.detect",
+      "deny": true,
+      "parameters": {
+        "agentic": false,
+        "threshold": 0.5,
+        "source": "portkey-chatbot",
+        "destination": "api.openai.com"
+      }
+    }
+  ],
+  "after_request_hooks": [
+    {
+      "type": "guardrail",
+      "id": "straiker.detect",
+      "deny": true,
+      "parameters": {
+        "agentic": false,
+        "threshold": 0.5,
+        "source": "portkey-chatbot",
+        "destination": "api.openai.com"
+      }
+    }
+  ]
+}
