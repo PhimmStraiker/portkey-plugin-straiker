@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Build the coding-agent middleware image, push to ECR, and deploy to App Runner.
 #
-# The Straiker key goes to Secrets Manager and is injected as a RuntimeEnvironmentSecret.
-# It is never written to this script, to the image, or to the service's plaintext env.
+# The Straiker key is passed as a runtime env var (App Runner encrypts these at rest).
+# It is read from your shell at deploy time and is never written into this script, the
+# image, or the repo. Set USE_SECRETS_MANAGER=1 if you want it in Secrets Manager instead.
 #
 # Prereqs: refreshed AWS creds, docker running, and the key exported:
 #     export STRAIKER_API_KEY=...      # coding-agent app key
@@ -26,17 +27,22 @@ TAG="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo latest)"
 
 echo "== region $REGION / account $ACCT / tag $TAG =="
 
-echo "== 1. secret -> Secrets Manager =="
-if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" >/dev/null 2>&1; then
-  aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" \
-    --secret-string "$STRAIKER_API_KEY" --region "$REGION" >/dev/null
+SECRET_ARN=""
+if [ "${USE_SECRETS_MANAGER:-0}" = "1" ]; then
+  echo "== 1. secret -> Secrets Manager =="
+  if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" >/dev/null 2>&1; then
+    aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" \
+      --secret-string "$STRAIKER_API_KEY" --region "$REGION" >/dev/null
+  else
+    aws secretsmanager create-secret --name "$SECRET_NAME" \
+      --description "Straiker coding-agent app key used by the Portkey middleware" \
+      --secret-string "$STRAIKER_API_KEY" --region "$REGION" >/dev/null
+  fi
+  SECRET_ARN="$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" --query ARN --output text)"
+  echo "   $SECRET_ARN"
 else
-  aws secretsmanager create-secret --name "$SECRET_NAME" \
-    --description "Straiker coding-agent app key used by the Portkey middleware" \
-    --secret-string "$STRAIKER_API_KEY" --region "$REGION" >/dev/null
+  echo "== 1. key passed as a runtime env var (set USE_SECRETS_MANAGER=1 to use Secrets Manager) =="
 fi
-SECRET_ARN="$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" --query ARN --output text)"
-echo "   $SECRET_ARN"
 
 echo "== 2. ECR repo + login =="
 aws ecr describe-repositories --repository-names "$IMG" --region "$REGION" >/dev/null 2>&1 \
@@ -61,19 +67,21 @@ if [ -z "$ACCESS_ROLE_ARN" ]; then
   sleep 10
 fi
 
+INSTANCE_ROLE_ARN=""
 INSTANCE_ROLE_NAME="straiker-portkey-coding-instance-role"
-INSTANCE_ROLE_ARN="$(aws iam get-role --role-name "$INSTANCE_ROLE_NAME" --query Role.Arn --output text 2>/dev/null || echo "")"
-if [ -z "$INSTANCE_ROLE_ARN" ]; then
-  echo "   creating $INSTANCE_ROLE_NAME"
-  INSTANCE_ROLE_ARN="$(aws iam create-role --role-name "$INSTANCE_ROLE_NAME" \
-    --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"tasks.apprunner.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
-    --query Role.Arn --output text)"
-  sleep 10
+if [ -n "$SECRET_ARN" ]; then
+  INSTANCE_ROLE_ARN="$(aws iam get-role --role-name "$INSTANCE_ROLE_NAME" --query Role.Arn --output text 2>/dev/null || echo "")"
+  if [ -z "$INSTANCE_ROLE_ARN" ]; then
+    echo "   creating $INSTANCE_ROLE_NAME"
+    INSTANCE_ROLE_ARN="$(aws iam create-role --role-name "$INSTANCE_ROLE_NAME" \
+      --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"tasks.apprunner.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
+      --query Role.Arn --output text)"
+    sleep 10
+  fi
+  aws iam put-role-policy --role-name "$INSTANCE_ROLE_NAME" --policy-name read-straiker-key \
+    --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"secretsmanager:GetSecretValue\"],\"Resource\":\"$SECRET_ARN\"}]}"
 fi
-aws iam put-role-policy --role-name "$INSTANCE_ROLE_NAME" --policy-name read-straiker-key \
-  --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"secretsmanager:GetSecretValue\"],\"Resource\":\"$SECRET_ARN\"}]}"
 echo "   access=$ACCESS_ROLE_ARN"
-echo "   instance=$INSTANCE_ROLE_ARN"
 
 echo "== 5. create/update App Runner service =="
 ENV_JSON=$(cat <<EOF
@@ -81,21 +89,24 @@ ENV_JSON=$(cat <<EOF
   "STRAIKER_BLOCK_ENABLED":"${STRAIKER_BLOCK_ENABLED:-true}",
   "STRAIKER_CHATTER_FILTER":"true",
   "STRAIKER_DETECT_TIMEOUT":"${STRAIKER_DETECT_TIMEOUT:-2.5}",
-  "STRAIKER_DEFAULT_USER_NAME":"${STRAIKER_DEFAULT_USER_NAME:-portkey-coding}" }
+  "STRAIKER_DEFAULT_USER_NAME":"${STRAIKER_DEFAULT_USER_NAME:-portkey-coding}"$( [ -z "$SECRET_ARN" ] && printf ',\n  "STRAIKER_API_KEY":"%s"' "$STRAIKER_API_KEY" ) }
 EOF
 )
+if [ -n "$SECRET_ARN" ]; then
+  IMAGE_CFG="{ \"Port\":\"8080\", \"RuntimeEnvironmentVariables\":$ENV_JSON, \"RuntimeEnvironmentSecrets\":{\"STRAIKER_API_KEY\":\"$SECRET_ARN\"} }"
+else
+  IMAGE_CFG="{ \"Port\":\"8080\", \"RuntimeEnvironmentVariables\":$ENV_JSON }"
+fi
 SRC=$(cat <<EOF
 { "ImageRepository": {
     "ImageIdentifier":"$ECR/$IMG:$TAG","ImageRepositoryType":"ECR",
-    "ImageConfiguration":{ "Port":"8080",
-      "RuntimeEnvironmentVariables":$ENV_JSON,
-      "RuntimeEnvironmentSecrets":{"STRAIKER_API_KEY":"$SECRET_ARN"} } },
+    "ImageConfiguration":$IMAGE_CFG },
   "AutoDeploymentsEnabled": false,
   "AuthenticationConfiguration": { "AccessRoleArn":"$ACCESS_ROLE_ARN" } }
 EOF
 )
 HEALTH='{"Protocol":"HTTP","Path":"/health","Interval":10,"Timeout":5,"HealthyThreshold":1,"UnhealthyThreshold":5}'
-INSTANCE="{\"Cpu\":\"1024\",\"Memory\":\"2048\",\"InstanceRoleArn\":\"$INSTANCE_ROLE_ARN\"}"
+if [ -n "$INSTANCE_ROLE_ARN" ]; then INSTANCE="{\"Cpu\":\"1024\",\"Memory\":\"2048\",\"InstanceRoleArn\":\"$INSTANCE_ROLE_ARN\"}"; else INSTANCE='{"Cpu":"1024","Memory":"2048"}'; fi
 
 ARN="$(aws apprunner list-services --region "$REGION" \
   --query "ServiceSummaryList[?ServiceName=='$SVC'].ServiceArn" --output text)"
