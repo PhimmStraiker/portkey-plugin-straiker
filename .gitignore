@@ -11,3 +11,10 @@ coverage/
 __pycache__/
 *.pyc
 .venv/
+
+# local secrets - never commit
+.env
+.env.*
+!.env.example
+deploy/*.local
+secrets/
