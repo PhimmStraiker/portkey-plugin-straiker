@@ -56,7 +56,7 @@ for `/guardrails` and `/configs`, so it needs an admin key or the dashboard.
 
 ```json
 {
-  "provider": "@bedrock-prod",
+  "provider": "@<your-provider-slug>",
   "before_request_hooks": [
     { "type": "guardrail", "id": "<guardrail id>", "deny": true, "async": false }
   ],
@@ -65,6 +65,12 @@ for `/guardrails` and `/configs`, so it needs an admin key or the dashboard.
   ]
 }
 ```
+
+**The provider slug must be one that exists in your Model Catalog.** Portkey validates it
+before hooks run, so a wrong slug fails every request with
+`400 {"status":"failure","message":"Following keys are not valid: <slug>"}` and the guardrail
+never fires. `@bedrock-prod` is the name used in Portkey's own docs and is **not** a real slug
+in this workspace; `@phimmoaikey` is confirmed working here.
 
 `async: false` matters. The default is `true`, which logs but can never block. `deny: true`
 turns a failed verdict into a 446.
@@ -109,6 +115,36 @@ from the demo tenant:
 
 The Console shows severity and category on the coding-agent card rather than the numeric
 score.
+
+## Verified end to end
+
+A Claude Code shaped request (system markers, the four core tools, `metadata.user_id`
+carrying a session id, a `<system-reminder>` block ahead of the real prompt) was sent to
+`api.portkey.ai/v1/messages` with the webhook guardrail attached. Portkey returned 200 with a
+real `tool_use` block, and its own `hook_results` confirm the middleware was called:
+
+```json
+{ "verdict": true,
+  "explanation": "Webhook request succeeded",
+  "webhookUrl": "https://ygkakrnf8v.us-east-2.awsapprunner.com/portkey/coding",
+  "execution_time": 274 }
+```
+
+274 ms for the whole guardrail hop: Portkey to the middleware, event reconstruction, the
+`/api/v1/detect` call, and back. Well inside a 5000 ms webhook timeout.
+
+To see hook results yourself, send `x-portkey-strict-open-ai-compliance: false`. Note that on
+`/v1/messages` the Anthropic SDK will not surface them, since it only parses Anthropic events;
+use raw HTTP.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `403` with body `error code: 1010` | Cloudflare blocking the client fingerprint, not a Portkey permissions problem. Scripts using Python's default `urllib` user agent get this; send a real `User-Agent`. Claude Code itself is unaffected |
+| `400 Following keys are not valid: <slug>` | The config's provider slug does not exist in the Model Catalog. Fix the config; hooks never run until this passes |
+| Everything returns 200 but nothing appears in Straiker | The guardrail is probably `async: true` (the default), which logs only. Set `async: false` |
+| Portkey admin API returns `403 / AB03` | Managing guardrails and configs over the API needs an Enterprise plan. Use the dashboard |
 
 ## Notes
 
