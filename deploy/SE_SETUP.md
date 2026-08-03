@@ -23,21 +23,23 @@ Two lines, then run `claude` as normal:
 
 ```bash
 export ANTHROPIC_BASE_URL=https://api.portkey.ai      # note: no /v1 suffix
-export ANTHROPIC_AUTH_TOKEN=<your Portkey API key>
+export ANTHROPIC_AUTH_TOKEN=<their Portkey API key>
 ```
 
-That is the whole SE-facing setup, provided the admin step below attached the config to the
-key. Claude Code appends `/v1/messages` itself, and Portkey resolves the provider and the
-Straiker guardrail from the config bound to that key.
+That is the entire SE-facing setup. Claude Code appends `/v1/messages` itself, and Portkey
+resolves both the upstream provider and the Straiker guardrail from the config bound to the
+key, so no headers and no provider slug are needed on the SE's machine.
 
-If a key has no default config attached, the SE also needs:
+If `ANTHROPIC_API_KEY` is already set, unset it; it takes precedence and the traffic will go
+straight to Anthropic, bypassing Portkey and Straiker entirely.
 
-```bash
-export ANTHROPIC_CUSTOM_HEADERS="x-portkey-api-key: <your Portkey API key>
-x-portkey-provider: @bedrock-prod"
-```
+### A gateway cannot use the SE's own Claude subscription
 
-Prefer binding the config to the key so SEs never have to set headers.
+Pointing `ANTHROPIC_BASE_URL` at a gateway means Claude Code stops talking to
+`api.anthropic.com`. A personal Pro/Max login is an OAuth session against Anthropic and does
+not travel to a third party, so Portkey authenticates the SE with the Portkey key and then
+uses its **own** upstream Anthropic credential. Usage bills to that org key, not to the SE's
+subscription. This is inherent to any gateway, the shared Kong setup included.
 
 ## One-time admin setup in the Portkey dashboard
 
@@ -116,24 +118,39 @@ from the demo tenant:
 The Console shows severity and category on the coding-agent card rather than the numeric
 score.
 
+## The live setup
+
+Already built in the Shared Team Workspace; listed here so it can be rebuilt or audited.
+
+| Object | Value |
+|---|---|
+| Guardrail | `pg-claude-16a4b1` ("Claude Code Middleware") -> webhook to the middleware |
+| Config | `pc-claude-a61783` ("Claude Code Middleware Straiker") |
+| Provider | `@dev-workspace` (the workspace's **Anthropic** integration) |
+| Config body | `{"provider":"@dev-workspace","before_request_hooks":[{"type":"guardrail","id":"pg-claude-16a4b1","deny":true,"async":false}],"after_request_hooks":[ ...same... ]}` |
+
 ## Verified end to end
 
-A Claude Code shaped request (system markers, the four core tools, `metadata.user_id`
-carrying a session id, a `<system-reminder>` block ahead of the real prompt) was sent to
-`api.portkey.ai/v1/messages` with the webhook guardrail attached. Portkey returned 200 with a
-real `tool_use` block, and its own `hook_results` confirm the middleware was called:
+Real `claude` CLI, nothing but the two env vars above:
 
-```json
-{ "verdict": true,
-  "explanation": "Webhook request succeeded",
-  "webhookUrl": "https://ygkakrnf8v.us-east-2.awsapprunner.com/portkey/coding",
-  "execution_time": 274 }
+```
+$ claude -p "read notes.txt and tell me what it contains in one sentence"
+The file contains two lines with the words "hello" and "world" separated by line breaks.
 ```
 
-274 ms for the whole guardrail hop: Portkey to the middleware, event reconstruction, the
-`/api/v1/detect` call, and back. Well inside a 5000 ms webhook timeout.
+And the same request shape driven directly at `/v1/messages` returns Claude Sonnet 4.5 with a
+`tool_use` block, with Portkey's own `hook_results` confirming both hooks called the
+middleware:
 
-To see hook results yourself, send `x-portkey-strict-open-ai-compliance: false`. Note that on
+```
+before_request_hooks: verdict=true  Webhook request succeeded  (472 ms)
+after_request_hooks:  verdict=true  Webhook request succeeded  (144 ms)
+```
+
+Those timings cover the whole hop: Portkey to the middleware, event reconstruction, the
+`/api/v1/detect` call, and back. Comfortably inside a 5000 ms webhook timeout.
+
+To see hook results yourself, send `x-portkey-strict-open-ai-compliance: false`. On
 `/v1/messages` the Anthropic SDK will not surface them, since it only parses Anthropic events;
 use raw HTTP.
 
