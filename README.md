@@ -1,4 +1,31 @@
-# Straiker DefendAI plugin for the Portkey AI Gateway
+# Straiker DefendAI for the Portkey AI Gateway
+
+Two things live in this repo:
+
+| | What it is | Use it when |
+|---|---|---|
+| **`middleware/`** | A small service that sits behind a Portkey **Webhook guardrail** and scores **Claude Code** traffic through Straiker's coding-agent pipeline | Portkey **SaaS**, or anything with Claude Code in it. Needs no Portkey plugin and no argus change |
+| **`plugins/straiker/`** | A custom TypeScript plugin compiled into the gateway | You run the Portkey gateway **yourself** and want chatbot / agentic scoring in-process |
+
+**Start with the middleware.** Portkey SaaS compiles plugins into its binary, so custom plugin
+code cannot be installed there; the Webhook guardrail is the only customer-code extension
+point, and it is available on all plans. See **[`deploy/DEPLOYMENT.md`](deploy/DEPLOYMENT.md)**
+for the full record and **[`deploy/SE_SETUP.md`](deploy/SE_SETUP.md)** for the two env vars an
+SE needs.
+
+```
+claude -> api.portkey.ai -> Anthropic
+              |  webhook guardrail (before + after)
+              v
+      middleware  ->  /api/v1/detect  (x-tool: claude-code)
+```
+
+Verified end to end with the real `claude` CLI: both hooks call the middleware, and 19 real
+captured Claude Code sessions replay at 100% recall against the native hook events.
+
+---
+
+## The TypeScript plugin (self-hosted gateways)
 
 Custom Portkey plugin that scores requests and responses against the Straiker DefendAI detect API. Mirrors the Kong, Azure APIM and LiteLLM integrations: same payload, same agent-loop dedup, same blocking semantics. Single-turn chatbot apps hit `/api/v1/detect`; multi-turn / tool-calling agents hit `/api/v1/detect?agentic` with the full `messages[]` (including `tool_calls` and tool results).
 
